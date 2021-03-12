@@ -7,13 +7,16 @@ class CountDownLatch
         mutable std::mutex mutex_; 
         std::condition_variable cond_;
     public:
-        explicit  CountDownLatch(int count):
-            count_(count)
-            {}
+        explicit  CountDownLatch(int count);
         void await();
         void countDown();
         int getCount() const;
 };
+CountDownLatch::CountDownLatch(int count):
+    count_(count)
+{
+
+}
 
 void CountDownLatch::await()
 {

@@ -24,15 +24,15 @@ class LinkedBlockingQueue
      * */
 
     public:
-        LinkedBlockingQueue(int capacity) = default;
+        explicit LinkedBlockingQueue(int capacity);
         ~LinkedBlockingQueue();
         LinkedBlockingQueue(const LinkedBlockingQueue&) = delete;
         LinkedBlockingQueue& operator=(const LinkedBlockingQueue& ) = delete;
 
         void put(T new_value);
         bool offer(T new_value);
-        std::unique_ptr<T> take();
-        std::unique_ptr<T> poll();
+        std::shared_ptr<T> take();
+        std::shared_ptr<T> poll();
 
         bool empty() const;
         int capacity() const;
@@ -93,7 +93,7 @@ class LinkedBlockingQueue
 
         private:
             void enqueue( std::unique_ptr<T> pnode);
-            std::unique_ptr<T> dequeue();
+            std::shared_ptr<T> dequeue();
 };
 
 template<typename T>
@@ -162,16 +162,16 @@ bool LinkedBlockingQueue<T>::offer(T new_value)
 template<typename T>
 void LinkedBlockingQueue<T>::enqueue( std::unique_ptr<T> pnode)
 {
-    tail->next = std::move(node);
+    tail->next = std::move(pnode);
     tail = (tail->next).get();
 }
 
 template<typename T>
-std::unique_ptr<T> LinkedBlockingQueue<T>::poll()
+std::shared_ptr<T> LinkedBlockingQueue<T>::poll()
 {
     std::unique_lock<std::mutex> putLock(headMutex_);
     if(count_.load() == 0)
-        return nullptr;
+        return std::shared_ptr<T>(); //return nullptr;
     std::shared_ptr<T> res = dequeue();
     int c = count_.fetch_sub(1);
     if(c > 1)
@@ -183,7 +183,7 @@ std::unique_ptr<T> LinkedBlockingQueue<T>::poll()
 }
 
 template<typename T>
-std::unique_ptr<T> LinkedBlockingQueue<T>::take()
+std::shared_ptr<T> LinkedBlockingQueue<T>::take()
 {
     std::lock_guard<std::mutex> putLock(headMutex_);
     notEmpty_.wait(headLock, [this]{ count_.load() > 0; });
@@ -200,11 +200,11 @@ std::unique_ptr<T> LinkedBlockingQueue<T>::take()
 
 
 template<typename T>
-std::unique_ptr<T> LinkedBlockingQueue<T>::dequeue()
+std::shared_ptr<T> LinkedBlockingQueue<T>::dequeue()
 {
-    std::unique_ptr<Node> oldHead = std::move(head_);
-    head = std::move(oldHead->next);
-    return oldHead;
+    std::shared_ptr<T> const res((head_->next)->item);
+    head_->next = std::move((head_->next)->next);    
+    return res;
 }
 
 
@@ -237,8 +237,13 @@ void LinkedBlockingQueue<T>::clear()
      /**
      * Locks to prevent both puts and takes.
      */
-    std::lock_guard<std::mutex> putLock(tailMutex_);
-    std::lock_guard<std::mutex> takeLock(headMutex_);
+    // std::lock_guard<std::mutex> putLock(tailMutex_); Bad
+    // std::lock_guard<std::mutex> takeLock(headMutex_); Bad
+    // In C++17 std::scoped_lock guard(tailMutex_, headMutex_); Good
+    // See:C++ Concurreny In Action 3.2.4 Deadlock: the problem and a solution
+    std::lock(tailMutex_, headMutex_);
+    std::lock_guard<std::mutex> putLock(tailMutex_, std::adopt_lock);
+    std::lock_guard<std::mutex> takeLock(headMutex_, std::adopt_lock);
     while(head_->next)
     {
         ((head_->next)->item).reset();

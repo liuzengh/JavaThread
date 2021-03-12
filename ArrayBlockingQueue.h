@@ -2,14 +2,34 @@
 #include <mutex>
 #include <condition_variable>
 #include <memory>
+
+
+/**
+ * A bounded {@linkplain BlockingQueue blocking queue} backed by an
+ * array.  This queue orders elements FIFO (first-in-first-out).  The
+ * <em>head</em> of the queue is that element that has been on the
+ * queue the longest time.  The <em>tail</em> of the queue is that
+ * element that has been on the queue the shortest time. New elements
+ * are inserted at the tail of the queue, and the queue retrieval
+ * operations obtain elements at the head of the queue.
+ *
+ * <p>This is a classic &quot;bounded buffer&quot;, in which a
+ * fixed-sized array holds elements inserted by producers and
+ * extracted by consumers.  Once created, the capacity cannot be
+ * changed.  Attempts to {@code put} an element into a full queue
+ * will result in the operation blocking; attempts to {@code take} an
+ * element from an empty queue will similarly block.
+ */
+
+
 template<typename T>
 class ArrayBlockingQueue
 {
     public:
         explicit ArrayBlockingQueue(int capacity);
         ~ArrayBlockingQueue();
-        ArrayBlockingQueue(const ArrayBlockingQueue& other);
-        ArrayBlockingQueue& operator=(const ArrayBlockingQueue& other);
+        ArrayBlockingQueue(const ArrayBlockingQueue& other) = delete;
+        ArrayBlockingQueue& operator=(const ArrayBlockingQueue& other) = delete;
         std::shared_ptr<T> take();
         std::shared_ptr<T> poll();
         void put(T new_value);
@@ -50,7 +70,6 @@ class ArrayBlockingQueue
         std::condition_variable notFull;
 
 
-
 };
 template<typename T>
 ArrayBlockingQueue<T>::ArrayBlockingQueue(int capacity):
@@ -82,7 +101,7 @@ void ArrayBlockingQueue<T>::put(T new_value)
 
 template<typename T>
 bool ArrayBlockingQueue<T>::offer(T new_value)
-{ // FIXME:
+{ 
     std::lock_guard<std::mutex> lk(mutex_);
     if(count_ = capacity_)
         return false;
