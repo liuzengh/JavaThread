@@ -132,7 +132,7 @@ std::shared_ptr<T> ArrayBlockingQueue<T>::poll()
 {
     std::lock_guard<std::mutex> lk(mutex_);
     if(count == 0)
-        return nullptr;
+        return std::shared_ptr<T>();
     return dequeue();
 };
 
@@ -147,7 +147,7 @@ void ArrayBlockingQueue<T>::enqueue(T &value)
     items_[putIndex_] = std::move(new_value);
     if(++putIndex_ == capacity_)
         putIndex_ = 0;
-    count++;
+    count_++;
     notEmpty.notify_one();
 }
 
