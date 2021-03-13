@@ -11,7 +11,7 @@
 - [x] CountDownLatch, 缺文档
 - [x] ArrayBlockingQueue，文档已完善
 - [x] LinkedBlockingQueue，缺文档 
-- [ ] DelayQueue
+- [x] DelayQueue,  文档已完善
 - [ ] PriorityBlockingQueue
 - [ ] SynchronousQueue
 - [x] LinkedBlockingDeque, 文档已完善
@@ -118,19 +118,119 @@ std::shared_ptr<T> ArrayBlockingQueue<T>::dequeue()
 ```
 ### DelayQueue
 
-DelayQueue是一个无界阻塞队列，放置于队列中的延迟对象Delayed只有到期后才能被取出。从队列中取出的元素是按照它们的延时按时间排序取出的，队头存放的对象过期时间最早，如果不存在过期的对象，则poll操作会返回null。当调用延迟对象Delayed的getDelay()方法返回0或负数时，说明该延迟对象已经过期。
-- 其他细节：mutable关键词，模板类的继承
-- 实现注意点3: Leader-Followr模式
-- 实现注意点2:
-底层的数据结构是优先队列(PriorityQueue)，持有一把全局锁。
-- 实现注意点1：延迟队列中的元素必须实现 java.util.concurrent.Delayed接口中的getDelay()的方法，getDelay方法如果返回0或者是负值，则说明该元素已经过期了，调用DelayQueue中的take()方法可以将该元素取出。Delayed接口同时需要实现Comparable接口，这是为DelayQueue提供比较的Delayed元的能力的，使得最先过期的放置于优先队列的队首。
+DelayQueue是一个无界阻塞队列，放置于队列中的延迟对象Delayed只有到期后才能被取出。从队列中取出的对象是按照它们的延时时间排序取出的，队头存放的对象过期时间最早。**值得注意的是，DelayQueue实现了领导者/追随者模式(Leader-Follower pattern)的变体，来最小化不必要的时间等待，我在并发控制一节会详细说明**。由于无界队列阻塞操作只可能出现在消费者一端，如果不存在过期的对象，取操作take会阻塞，poll操作会返回null；而生产者放置对象的put和offer操作不会产生阻塞。
 
-```java
-public interface Delayed extends Comparable<Delayed> {
- public long getDelay(TimeUnit timeUnit);
+#### 数据结构
 
+底层的数据结构是优先队列(PriorityQueue)，始终维持队首的对象最早过期，持有一把全局锁和一个条件变量。
+
+*Delayed对象*
+1. 放置在队列中的Delayed接口需要实现Comparable接口，这是方便DelayQueue对Delayed对象进行比较，使得最先过期的放置于优先队列的队首。
+2. Delayed对象同时需要实现java.util.concurrent.Delayed接口中的getDelay()的方法，getDelay方法如果返回0或者是负值，则说明该元素已经过期了，调用DelayQueue中的take()方法可以将该元素取出。
+
+我用C++实现的一个自定义的Delayed类如下所示：
+1. 需要实现Delay类中的<运算符进行重载，
+2. getDelay方法直接返回超时的绝对时间，关于时间的操作我直接使用了chrono中的工具,使用`chrono::nanoseconds`最小时间间隔，使用稳定的时钟`std::chrono::steady_clock`。
+3. 另外，getDelay方法应该声明为常成员函数，该操作中不修改成员变量的值，应该q.top()返回的是对常量的引用，这是因为我在实现中运用了如下写法q.top().getDelay()。
+
+```c++
+class Delayed
+{
+    private:
+        std::chrono::steady_clock::time_point timeout_;
+        int index_;
+    public:
+        Delayed(chrono::nanoseconds timeUint): timeout_(std::chrono::steady_clock::now()+ timeUint){};
+        Delayed(std::chrono::steady_clock::time_point timeout, int index): timeout_(timeout), index_(index){};
+        bool operator<(const Delayed&rhs) const
+        {
+            return this->timeout_ >= rhs.timeout_;
+        }
+        std::chrono::steady_clock::time_point  getDelay() const
+        {
+            return timeout_;
+        };
+        int getIndex() const {return index_; }
+};
+```
+
+#### 并发控制
+
+*领导者/追随者模式*
+从服务器的并发编程角度来看可以分为半同步/半异步(half-sync/half-saync)模式和领导者/追随者模式(Leader-Followers)
+
+领导者/追随者模式是多个工作线程轮流获得事件源集合，轮流监听、分发处理的一种模式。在任意时间点，程序都仅有一个领导者线程，它负责监听I/O事件、而其他线程都是追随者，它们休眠在线程池中等待成为领导者。当前的领导者如果检测到I/O事件，首先要从线程池中推选出新的领导者，然后处理I/O事件。此时新的领导者等待I/O事件，而原来的领导者则处理I/O事件，二者实现了并发。
+
+在DelayQueue中的并发逻辑和上述说明非常类似，具体如下：
+当一个线程成为leader的时候，它等待直到队首对象的超时的绝对时间，而其他线程则进入无限等待中。当leader线程从队列中取走元素之前必须通知其他线程，除非其他线程在这之间已经成为了leader。当生产者新放入的Delayed的对象比队列中所有的对象的超时时间点都靠前的时候，这时leader被重置为null，同时生产线程唤醒等待的消费线程，消费线程最后只有消费者争先成为leader。所有处在等待中的消费线程都随时准备好获取和失去领导权。
+
+实现上用`std::thread::id leader_;`来标识当前的线程，`std::thread::id`可以提供比较运算，其内部类型实质为pthread_t是一个无符号的整型，线程库并没有提供其是否有效的判断，不能想当然的置为0当作无效状态，我这里额外使用`bool hasLeader_;`来提供有效判断，当该值为真是`leader_`代表的线程是leader线程，否找当前处于无leader状态。
+    
+*放入对象*
+由于是无界阻塞队列，放入操作put和offer是一样的，需要注意的是如果放入前队列为空或者要放入的对象比队列中所有对象都先超时的话，需要重置leader，释放领导权，同时通知消费线程。
+> queue_.size() == 0 ||  value < queue_.top()
+```c++
+template<typename T>
+bool DelayQueue<T>::offer(const T &value)
+{
+
+    std::lock_guard<std::mutex> lock(mutex_);
+    bool  resetLeader_ = queue_.size() == 0 ||  value < queue_.top()
+                        ? true
+                        : false;
+    queue_.push(value);
+    if(true)
+    {
+        hasLeader_ = false;
+        available_.notify_one();
+    }
+    return true;
 }
 ```
+*取出对象*
+ 
+ 具体说明下面代码中的注释，一个典型的场景是考虑一个要很久过期的对象先入队，然后消费线程都睡眠在队首了，接着一个然后一个马上要过期的对象在入队的情形。
+```c++
+template<typename T>
+std::shared_ptr<T> DelayQueue<T>::take()
+{
+    std::unique_lock<std::mutex> lock(mutex_);
+    for(;;) // 没有在条件变量wait方法上加入条件，这是因为下面代码块逻辑稍多，需要无限循环，防止假醒
+    {
+        if(queue_.size() == 0)
+            available_.wait(lock);
+        else
+        {
+            std::chrono::steady_clock::time_point timeout =  (queue_.top()).getDelay(); 
+            /*队首对象已经超时，退出循环，然后取出*/
+            if(timeout <= std::chrono::steady_clock::now())
+                break;
+            
+            /* 当一个线程成为leader的时候，它等待直到队首对象的超时的绝 对时间，而其他线程则进入无限等待中。*/
+            if(hasLeader_)
+                available_.wait(lock);
+            else
+            {
+                std::thread::id thisThread =  std::this_thread::get_id();
+                leader_ =  thisThread;
+                available_.wait_until(lock, timeout);
+                if(leader_ == thisThread)
+                    hasLeader_ = false;
+            }
+        }
+    }
+    /*取出队首对象*/
+    std::shared_ptr<T> const res(std::make_shared<T>(std::move(queue_.top())));
+    queue_.pop(); 
+    /* 当leader线程从队列中取走元素之前必须通知其他线程，除非其他线程在这之间已经成为了leader。*/
+    if(!hasLeader_ && queue_.size() > 0)
+        available_.notify_one();
+    return res;
+}
+```
+
+
+
 
 ### LinkedBlockingDequeue
 - Dequeue: Double End Queue, 双端队列
