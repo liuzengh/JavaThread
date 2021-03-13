@@ -80,13 +80,13 @@ class LinkedBlockingQueue
         Node *tail;
 
         /** Lock held by take, poll, etc */
-        std::mutex headMutex_;
+        mutable std::mutex headMutex_;
 
         /** Wait queue for waiting takes */
         std::condition_variable notEmpty_;
         
          /** Lock held by put, offer, etc */
-        std::mutex tailMutex_;
+        mutable std::mutex tailMutex_;
 
          /** Wait queue for waiting puts */
         std::condition_variable notFull_;

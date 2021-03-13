@@ -1,3 +1,4 @@
+# pragma once
 #include <vector>
 #include <mutex>
 #include <condition_variable>
@@ -27,20 +28,20 @@ class ArrayBlockingQueue
 {
     public:
         explicit ArrayBlockingQueue(int capacity);
-        ~ArrayBlockingQueue();
+        ~ArrayBlockingQueue() = default;
         ArrayBlockingQueue(const ArrayBlockingQueue& other) = delete;
         ArrayBlockingQueue& operator=(const ArrayBlockingQueue& other) = delete;
         std::shared_ptr<T> take();
         std::shared_ptr<T> poll();
-        void put(T new_value);
-        bool offer(T new_value);
+        void put(const T &value);
+        bool offer(const T &value);
         bool empty() const;
         bool full() const;
         int size() const;
         int capacity() const;
 
     private:
-        void enqueue(T &new_value);
+        void enqueue(const T &value);
         std::shared_ptr<T> dequeue();
 
     private:
@@ -58,16 +59,16 @@ class ArrayBlockingQueue
         int putIndex_;
 
         /** The queued items */
-        vector<T> items_;
+        std::vector<T> items_;
         
         /** Main lock guarding all access */
         mutable std::mutex mutex_;
 
         /** Condition for waiting takes */
-        std::condition_variable notEmpty;
+        std::condition_variable notEmpty_;
 
         /** Condition for waiting puts */
-        std::condition_variable notFull;
+        std::condition_variable notFull_;
 
 
 };
@@ -78,7 +79,7 @@ ArrayBlockingQueue<T>::ArrayBlockingQueue(int capacity):
     takeIndex_(0),
     putIndex_(0)
 {
-    items_.reserve(capacity_);
+    items_.resize(capacity_);
 }
 
 
@@ -86,11 +87,11 @@ ArrayBlockingQueue<T>::ArrayBlockingQueue(int capacity):
  * waiting if necessary for space to become available. 
  */
 template<typename T>
-void ArrayBlockingQueue<T>::put(T new_value)
+void ArrayBlockingQueue<T>::put(const T &value)
 {
     std::unique_lock<std::mutex> lk(mutex_);
-    notFull.wait(lk, [this]{ return count_ < capacity_; });
-    enqueue(new_value);
+    notFull_.wait(lk, [this]{ return count_ < capacity_; });
+    enqueue(value);
 }
 
 
@@ -100,14 +101,14 @@ void ArrayBlockingQueue<T>::put(T new_value)
  */
 
 template<typename T>
-bool ArrayBlockingQueue<T>::offer(T new_value)
+bool ArrayBlockingQueue<T>::offer(const T &value)
 { 
     std::lock_guard<std::mutex> lk(mutex_);
     if(count_ = capacity_)
         return false;
     else
     {   
-        enqueue(new_value);
+        enqueue(value);
         return true;
     }
 }
@@ -119,7 +120,7 @@ template<typename T>
 std::shared_ptr<T> ArrayBlockingQueue<T>::take()
 {
     std::unique_lock<std::mutex> lk(mutex_);
-    notEmpty.wait(lk, [this]{ return count_ > 0; });
+    notEmpty_.wait(lk, [this]{ return count_ > 0; });
     return dequeue();
 }
 
@@ -131,7 +132,7 @@ template<typename T>
 std::shared_ptr<T> ArrayBlockingQueue<T>::poll()
 {
     std::lock_guard<std::mutex> lk(mutex_);
-    if(count == 0)
+    if(count_ == 0)
         return std::shared_ptr<T>();
     return dequeue();
 };
@@ -142,13 +143,13 @@ std::shared_ptr<T> ArrayBlockingQueue<T>::poll()
    * Call only when holding lock.
    */
 template<typename T>
-void ArrayBlockingQueue<T>::enqueue(T &value)
+void ArrayBlockingQueue<T>::enqueue(const T &value)
 {
-    items_[putIndex_] = std::move(new_value);
+    items_[putIndex_] = value; 
     if(++putIndex_ == capacity_)
         putIndex_ = 0;
     count_++;
-    notEmpty.notify_one();
+    notEmpty_.notify_one();
 }
 
 
@@ -163,8 +164,8 @@ std::shared_ptr<T> ArrayBlockingQueue<T>::dequeue()
         std::make_shared<T>(std::move(items_[takeIndex_])));
     if(++takeIndex_ == capacity_)
         takeIndex_ = 0;
-    count--;
-    notFull.notify_one();
+    count_--;
+    notFull_.notify_one();
     return res;
 }
 

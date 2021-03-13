@@ -51,7 +51,7 @@ class LinkedBlockingDeque
         int count_;
 
         /** Main lock guarding all access */
-        std::mutex mutex_;
+        mutable std::mutex mutex_;
 
         /** Condition for waiting takes */
         std::condition_variable notFull_;
