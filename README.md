@@ -8,16 +8,76 @@
 1. 采用非防御性编程，不进行类型检查和考虑null对象等，认为提供的数据正常。
 ## to-do
 
+
+- [x] ArrayBlockingQueue，文档已完善。循环数组实现的有界阻塞队列。
+- [x] LinkedBlockingQueue，缺文档 。双链表实现的有界阻塞队列。
+- [x] DelayQueue,  文档已完善。优先级队列实现的无界阻塞队列。
+- [x] PriorityBlockingQueue, 缺文档和测试。二叉堆实现支持优先级排序的无界阻塞队列。
+- [x] LinkedBlockingDeque, 文档已完善。双向链表实现的无界双向阻塞队列。
+- [ ] SynchronousQueue, 文档编写中。
+- [ ] TransferQueue
 - [x] CountDownLatch, 缺文档
-- [x] ArrayBlockingQueue，文档已完善
-- [x] LinkedBlockingQueue，缺文档 
-- [x] DelayQueue,  文档已完善
-- [ ] PriorityBlockingQueue
-- [ ] SynchronousQueue
-- [x] LinkedBlockingDeque, 文档已完善
 - [ ] ConcurrentMap
 - [ ] ThreadPoolExector
+- [ ] 实现自己的空间支配器和迭代器,修改互斥锁为可重入锁
 
+
+### SynchronousQueue
+
+SynchronousQueue是一个可以用来与另一个线程交换单个元素的队列。在队列中插入元素的线程会被阻塞，直到另一个线程从队列中取出该元素。同样，如果一个线程试图接受一个元素，而当前没有元素，那么该线程将被阻塞，直到一个线程将一个元素插入到队列中。 将这个类称之为队列有点言过其实，SynchronousQueue更像一个 rendesvouz point.
+
+一个synchronous queue 没有任何内部容量，容量为0。所以不可以使用peek方法因为只有当尝试移除的时候对象才出现。不能插入任何对象，除非有其他线程正尝试从队列中移除对象。也不能迭代这个队列，因为队列中不存在任何对象。队列的头部head是第一个进入队列的插入线程试图添加到队列中的元素。如果没有这样的插入线程队列则没有对象可供移除或获取，则poll操作将返回null。
+
+SynchronousQueue类似于CSP和Ada中使用的 rendezvous channels。它们非常适合切换设计，在切换设计中，运行在一个线程中的对象必须与运行在另一个线程中的对象同步，以便向其传递一些信息、事件或任务。
+
+这个类支持一个可选的公平策略，用于排序等待的生产者和消费者线程。默认情况下，不保证此顺序。然而，将公平性设置为true的队列以FIFO顺序被线程访问。
+
+
+#### 实现lockfree的栈和lockfree的队列来替代 SynchronousQueue
+
+无锁的数据结构依赖于使用原子操作和相关的内存序来保证数据以正确的顺序对其他线程是可见的。
+
+- memory_order_seq_cst
+- memory_order_release, memory_order_acquire
+- memory_order_relaxed
+
+
+### 线程池
+#### Simplest thread Pool
+
+
+- when: 线程在什么时候被创建，在什么时候开始运行
+工作线程在构造函数中被创建，创建的时候即指定运行的线程函数，存放在vector中。创建线程可能会有异常抛出，需要异常处理代码，
+- how: 工作线程中的线程函数的代码时怎样的。
+每个工作线程处于一个用全局循环标识变量控制的循环当中，只有当在线程池析构时，该循环标识为flase，每个工作线程退出循环，终止自身线程
+- when: 线程在什么时候结束，如何结束。
+当线程池析构时，设置全局循环标识为flase,每个工作线程会退出循环，终止自身线程,同时会线程池会join所有工作线程，等待工作线程结束。为了在join工作线程时，可能会有异常抛出，所有需要异常处理，否找会导致部分线程无法join。使用RAII手法，构造join_threads对象，在该对象析构的时候自动管理资源。（**）
+- how: 任务是如何提交的。
+放入线程安全的任务队列中，该任务队列是线程安全的阻塞队列。
+- how: 任务是如何分发给每个工作线程的。
+每个工作线程主动竞争从工作队列中获取任务来执行，具体就是工作线程处在一个循环之中，每次都非阻塞的尝试从任务队列中取任务，如果取到任务就开始执行，没有的话，就会调用yield方法，暂时释放cpu,让其他线程获取cpu。
+### PriorityBlockingQueue
+```
+其实这里不先释放锁也是可以的，也就是在整个扩容期间一直持有锁，但是扩容是需要花时间的，如果扩容的时候还占用锁，那么其他线程在这个时候是不能进行出队和入队操作的，
+
+这大大降低了并发性。所以为了提高性能，使用CAS控制只有一个线程可以进行扩容，并且在扩容前释放了锁，让其他线程可以进行入队和出队操作。
+
+spinlock锁使用CAS控制只有一个线程可以进行扩容，CAS失败的线程会调用Thread.yield() 让出 cpu，目的是为了让扩容线程扩容后优先调用 lock.lock 重新获取锁，
+
+但是这得不到一定的保证。有可能yield的线程在扩容线程扩容完成前已经退出，并执行了代码（6）获取到了锁。如果当前数组扩容还没完毕，当前线程会再次调用tryGrow方法，
+
+然后释放锁，这又给扩容线程获取锁提供了机会，如果这时候扩容线程还没扩容完毕，则当前线程释放锁后又调用yield方法让出CPU。可知当扩容线程进行扩容期间，
+
+其他线程是原地自旋通过代码（1）检查当前扩容是否完毕，等扩容完毕后才退出代码（1）的循环。
+
+当扩容线程扩容完毕后会重置自旋锁变量allocationSpinLock 为 0，这里并没有使用UNSAFE方法的CAS进行设置是因为同时只可能有一个线程获取了该锁，并且 allocationSpinLock 被修饰为了 volatile。
+
+当扩容线程扩容完毕后会执行代码 (6) 获取锁，获取锁后复制当前 queue 里面的元素到新数组。
+```
+
+
+[The C++ Standard Library, 2nd Edition](https://book.douban.com/subject/10440485/)
+[Data Structures and Algorithm Analysis in C++, 4nd Edition](https://book.douban.com/subject/1786210/)
 ### ArrayBlockingQueue
 
 ArrayBlockingQueue是一个有界阻塞队列，队列中的对象是先进先出的（FIFO），最早放入的对象位于队列的头部，最后放入的对象存放在队列的尾部。这里的"有界"指的是指初始化ArrayBlockingQueue时需要显式指定队列的容量大小capacity，队列中最多只能存放capacity多个对象，如果用put方法放入一个对象到一个已满的队列，则会导致阻塞；反之，如果用take方法从一个已空队列中取出一个对象，也会阻塞。
